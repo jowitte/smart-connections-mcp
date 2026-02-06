@@ -15,11 +15,15 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import * as path from 'path';
 import { SmartConnectionsLoader } from './smart-connections-loader.js';
 import { SearchEngine } from './search-engine.js';
+import { OllamaClient } from './ollama-client.js';
 
-// Environment variable for vault path
+// Environment variables
 const VAULT_PATH = process.env.SMART_VAULT_PATH;
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'nomic-embed-text-v2-moe:latest';
 
 if (!VAULT_PATH) {
   console.error('Error: SMART_VAULT_PATH environment variable is required');
@@ -28,12 +32,32 @@ if (!VAULT_PATH) {
   process.exit(1);
 }
 
+const CACHE_DIR = process.env.CACHE_DIR || path.join(VAULT_PATH, '.smart-env', 'query-cache');
+
 // Initialize loader
 const loader = new SmartConnectionsLoader(VAULT_PATH);
 await loader.initialize();
 
-// Create search engine after loader is initialized
-const searchEngine = new SearchEngine(loader);
+// Initialize Ollama client
+let ollamaClient: OllamaClient | null = null;
+try {
+  ollamaClient = new OllamaClient(OLLAMA_URL, OLLAMA_MODEL, CACHE_DIR);
+  const isHealthy = await ollamaClient.healthCheck();
+  
+  if (isHealthy) {
+    console.error(`✓ Ollama connected: ${OLLAMA_URL}`);
+    console.error(`✓ Ollama model: ${OLLAMA_MODEL}`);
+  } else {
+    console.error(`⚠ Ollama not available at ${OLLAMA_URL}, keyword search only`);
+    ollamaClient = null;
+  }
+} catch (error) {
+  console.error(`⚠ Failed to initialize Ollama: ${error}`);
+  ollamaClient = null;
+}
+
+// Create search engine with optional Ollama client
+const searchEngine = new SearchEngine(loader, ollamaClient || undefined);
 
 // Log embedding model info for debugging
 const modelKey = loader.getEmbeddingModelKey();
@@ -278,7 +302,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'search_notes': {
         const { query, limit, threshold } = SearchNotesSchema.parse(args);
-        const results = searchEngine.searchByQuery(query, limit, threshold);
+        const results = await searchEngine.searchByQuery(query, limit, threshold);
         return {
           content: [
             {
