@@ -33,7 +33,8 @@ export declare class SmartConnectionsLoader {
      */
     getConfig(): SmartEnvConfig | null;
     /**
-     * Get the embedding model key from config
+     * Get the embedding model key from config or actual embeddings
+     * Enhanced to support custom embedding models like nomic
      */
     getEmbeddingModelKey(): string;
     /**

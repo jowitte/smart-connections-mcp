@@ -5,14 +5,17 @@
 import type { SmartSource, SimilarNote, ConnectionNode, ConnectionGraph, NoteContent } from './types.js';
 import { cosineSimilarity, findNearestNeighbors } from './embedding-utils.js';
 import type { SmartConnectionsLoader } from './smart-connections-loader.js';
+import { OllamaClient } from './ollama-client.js';
 
 export class SearchEngine {
   private loader: SmartConnectionsLoader;
   private embeddingModelKey: string;
+  private ollamaClient: OllamaClient | null;
 
-  constructor(loader: SmartConnectionsLoader) {
+  constructor(loader: SmartConnectionsLoader, ollamaClient?: OllamaClient) {
     this.loader = loader;
     this.embeddingModelKey = loader.getEmbeddingModelKey();
+    this.ollamaClient = ollamaClient || null;
   }
 
   /**
@@ -173,37 +176,91 @@ export class SearchEngine {
 
   /**
    * Search notes by content similarity
+   * Now uses Ollama for semantic search with keyword fallback
    */
-  searchByQuery(
+  async searchByQuery(
     queryText: string,
     limit: number = 10,
     threshold: number = 0.5
-  ): SimilarNote[] {
-    // For now, we'll do a simple keyword match since we don't have
-    // a way to generate embeddings for arbitrary text without the model.
-    // In a full implementation, you'd call the embedding model here.
+  ): Promise<SimilarNote[]> {
+    // Try semantic search first if Ollama is available
+    if (this.ollamaClient) {
+      try {
+        const isHealthy = await this.ollamaClient.healthCheck();
+        
+        if (isHealthy) {
+          console.error('Using semantic search (Ollama)');
+          return await this.searchByEmbedding(queryText, limit, threshold);
+        } else {
+          console.error('Ollama unhealthy, falling back to keyword search');
+        }
+      } catch (error) {
+        console.error(`Semantic search failed: ${error}, falling back to keyword search`);
+      }
+    }
+    
+    // Fallback to keyword search
+    console.error('Using keyword search (fallback)');
+    return this.searchByKeyword(queryText, limit, threshold);
+  }
 
+  /**
+   * Semantic search using Ollama embeddings
+   */
+  private async searchByEmbedding(
+    queryText: string,
+    limit: number,
+    threshold: number
+  ): Promise<SimilarNote[]> {
+    if (!this.ollamaClient) {
+      throw new Error('Ollama client not initialized');
+    }
+    
+    // Generate embedding for query
+    const queryEmbedding = await this.ollamaClient.generateEmbedding(queryText);
+    
+    // Use existing embedding neighbor search
+    return this.getEmbeddingNeighbors(queryEmbedding, limit, threshold);
+  }
+
+  /**
+   * Keyword-based search (enhanced with token splitting)
+   */
+  private searchByKeyword(
+    queryText: string,
+    limit: number,
+    threshold: number
+  ): SimilarNote[] {
     const results: SimilarNote[] = [];
-    const queryLower = queryText.toLowerCase();
+    
+    // Split query into tokens for better matching
+    const tokens = queryText.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+    
+    if (tokens.length === 0) {
+      return results;
+    }
 
     for (const [path, source] of this.loader.getSources()) {
       try {
         const content = this.loader.readNoteContent(path).toLowerCase();
+        
+        // Score based on token matches
+        let totalScore = 0;
+        for (const token of tokens) {
+          const matches = (content.match(new RegExp(token, 'gi')) || []).length;
+          // Each token can contribute max 1.0 to the score
+          totalScore += Math.min(matches / 3, 1.0);
+        }
+        
+        // Average score across all tokens
+        const score = totalScore / tokens.length;
 
-        // Simple relevance scoring based on keyword matches
-        const matches = (content.match(new RegExp(queryLower, 'gi')) || []).length;
-
-        if (matches > 0) {
-          // Normalize score (this is a crude approximation)
-          const score = Math.min(matches / 10, 1.0);
-
-          if (score >= threshold) {
-            results.push({
-              path,
-              similarity: score,
-              blocks: Object.keys(source.blocks || {})
-            });
-          }
+        if (score >= threshold) {
+          results.push({
+            path,
+            similarity: score,
+            blocks: Object.keys(source.blocks || {})
+          });
         }
       } catch (error) {
         // Skip notes that can't be read
