@@ -126,14 +126,27 @@ export class SmartConnectionsLoader {
   }
 
   /**
-   * Get the embedding model key from config
+   * Get the embedding model key from config or actual embeddings
+   * Enhanced to support custom embedding models like nomic
    */
   getEmbeddingModelKey(): string {
     if (!this.config) {
       throw new Error('Configuration not loaded');
     }
 
-    // Extract the model key from the embed_model configuration
+    // ENHANCEMENT: Check actual embeddings in sources first
+    // This supports custom models like nomic-embed-text-v2-moe:latest
+    // that may not be in the standard config structure
+    const firstSource = Array.from(this.sources.values())[0];
+    if (firstSource && firstSource.embeddings) {
+      const embeddingKeys = Object.keys(firstSource.embeddings);
+      if (embeddingKeys.length > 0) {
+        console.error(`Using embedding model from sources: ${embeddingKeys[0]}`);
+        return embeddingKeys[0];
+      }
+    }
+
+    // Original logic as fallback (for standard TaylorAI/bge-micro-v2)
     const embedModel = this.config.smart_sources.embed_model;
     const adapter = embedModel.adapter;
 
@@ -150,7 +163,7 @@ export class SmartConnectionsLoader {
     const modelKeys = Object.keys(embedModel).filter(k => k !== 'adapter' && typeof embedModel[k] === 'object');
 
     if (modelKeys.length === 0) {
-      throw new Error('No embedding model found in configuration');
+      throw new Error('No embedding model found in configuration or sources');
     }
 
     return modelKeys[0];

@@ -35,9 +35,17 @@ await loader.initialize();
 // Create search engine after loader is initialized
 const searchEngine = new SearchEngine(loader);
 
+// Log embedding model info for debugging
+const modelKey = loader.getEmbeddingModelKey();
+const sources = loader.getSources();
+const firstSource = Array.from(sources.values())[0];
+const vectorDim = firstSource?.embeddings[modelKey]?.vec?.length || 'unknown';
+
 console.error('Smart Connections MCP Server initialized successfully');
 console.error(`Vault: ${VAULT_PATH}`);
 console.error(`Loaded ${loader.getSources().size} notes`);
+console.error(`✓ Embedding model: ${modelKey}`);
+console.error(`✓ Vector dimensions: ${vectorDim}`);
 
 // Create MCP server
 const server = new Server(
@@ -73,7 +81,7 @@ const SearchNotesSchema = z.object({
 });
 
 const GetEmbeddingNeighborsSchema = z.object({
-  embedding_vector: z.array(z.number()).describe('384-dimensional embedding vector'),
+  embedding_vector: z.array(z.number()).describe('Embedding vector (dimensionality depends on model)'),
   k: z.number().int().positive().default(10).describe('Number of neighbors to return'),
   threshold: z.number().min(0).max(1).default(0.5).describe('Similarity threshold (0-1)'),
 });
@@ -183,7 +191,7 @@ const tools: Tool[] = [
         embedding_vector: {
           type: 'array',
           items: { type: 'number' },
-          description: '384-dimensional embedding vector',
+          description: 'Embedding vector (dimensionality depends on model)',
         },
         k: {
           type: 'number',
